@@ -512,19 +512,41 @@ export default function App() {
         
         const stream = new MediaStream([...canvas.captureStream(30).getVideoTracks(), ...dest.stream.getAudioTracks()]);
 
-        let mimeType = 'video/webm;codecs=vp8,opus';
-        let fileExt = '.webm';
+        // Tentar os formatos de vídeo mais universais (como o WhatsApp usa: H.264 e AAC).
+        // TikTok tem problemas com o codec de áudio 'opus' em WebM no Android e iOS.
+        let mimeType = '';
+        let fileExt = '.mp4'; // Tentar MP4 por padrão se for suportado
 
-        if (MediaRecorder.isTypeSupported('video/mp4;codecs=h264,aac')) {
-            mimeType = 'video/mp4;codecs=h264,aac';
-            fileExt = '.mp4';
-        } else if (MediaRecorder.isTypeSupported('video/mp4')) {
-            mimeType = 'video/mp4';
-            fileExt = '.mp4';
-        } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')) {
-            mimeType = 'video/webm;codecs=vp9,opus';
-        } else if (MediaRecorder.isTypeSupported('video/webm;codecs=h264,opus')) {
-            mimeType = 'video/webm;codecs=h264,opus';
+        const types = [
+            'video/mp4;codecs=h264,aac',     // Padrão ouro (Apple/Android com boa compatibilidade)
+            'video/mp4;codecs=avc1,mp4a.40.2', // Variação MP4 comum
+            'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+            'video/mp4',                     // MP4 genérico (o navegador decide o codec)
+            'video/x-matroska;codecs=avc1,aac', // MKV/Matroska com codecs MP4 (suportado por alguns Androids, aceito pelo TikTok)
+            'video/webm;codecs=h264,pcm',    // WebM com codec H264 e PCM audio (raro, mas compatível)
+            'video/webm;codecs=h264,opus',   // WebM com codec H264
+            'video/webm;codecs=h264',        // WebM apenas H264
+            'video/webm;codecs=vp9,opus',    // VP9
+            'video/webm;codecs=vp8,opus',    // VP8
+            'video/webm'                     // WebM genérico
+        ];
+
+        for (let i = 0; i < types.length; i++) {
+            if (MediaRecorder.isTypeSupported(types[i])) {
+                mimeType = types[i];
+                if (mimeType.includes('webm')) {
+                    fileExt = '.webm';
+                } else if (mimeType.includes('matroska')) {
+                    fileExt = '.mkv';
+                }
+                break;
+            }
+        }
+
+        // Se por algum motivo o navegador não suportar nada da lista (raríssimo)
+        if (!mimeType) {
+            mimeType = 'video/webm';
+            fileExt = '.webm';
         }
 
         const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 3000000 });
@@ -545,7 +567,13 @@ export default function App() {
             const blob = new Blob(chunks, { type: mimeType });
             const url = URL.createObjectURL(blob); 
             setFinalVideoUrl(url);
-            showMsg("Gravação Concluída!", "success");
+
+            // Avisar o usuário se o vídeo não foi gerado em MP4/H.264, o que pode impactar a compatibilidade
+            if (mimeType.includes('webm') && (mimeType.includes('opus') || mimeType.includes('vp8'))) {
+                showMsg(`Concluído em ${fileExt} (TikTok pode não suportar o áudio)`, "error");
+            } else {
+                showMsg(`Gravação Concluída! (${fileExt})`, "success");
+            }
             sendNotification("Vídeo Pronto!", "A gravação da liturgia foi concluída com sucesso.");
             
             startPreviewLoop();
@@ -948,8 +976,12 @@ export default function App() {
                             <h3 className="text-xl font-black text-green-700 mb-4 text-center">Vídeo Concluído!</h3>
                             <video controls src={finalVideoUrl} className="max-w-full h-auto mx-auto mb-6 border rounded-2xl bg-black shadow-lg"></video>
                             
+                            <div className="text-center mb-4 text-xs text-gray-500 font-bold">
+                                Formato Gravado: {(window as any).videoMimeType || 'Desconhecido'}
+                            </div>
+
                             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                                <a href={finalVideoUrl} download={`Evangelho-${date.replace(/-/g,'.')}${(window as any).videoExt || '.webm'}`} className="flex items-center justify-center py-3 bg-green-600 text-white rounded-xl font-bold hover:bg-green-700 shadow transition">Baixar {(window as any).videoExt === '.mp4' ? 'MP4' : 'WebM'}</a>
+                                <a href={finalVideoUrl} download={`Evangelho-${date.replace(/-/g,'.')}${(window as any).videoExt || '.webm'}`} className="flex items-center justify-center py-3 bg-green-600 text-white rounded-xl font-bold hover:bg-green-700 shadow transition">Baixar {((window as any).videoExt || '').toUpperCase().replace('.', '') || 'Vídeo'}</a>
                                 <button onClick={uploadVideoToDrive} className="flex items-center justify-center py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 shadow transition">Salvar Drive</button>
                                 <button onClick={async () => {
                                     try {

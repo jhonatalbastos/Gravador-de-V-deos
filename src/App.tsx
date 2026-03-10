@@ -63,11 +63,55 @@ export default function App() {
 
     const sendNotification = useCallback((title: string, body: string) => {
         if (!("Notification" in window) || Notification.permission !== "granted") return;
-        new Notification(title, { body, icon: 'https://cdn-icons-png.flaticon.com/512/3204/3204325.png' });
+
+        try {
+            // Check if there are active service workers first
+            if (navigator.serviceWorker) {
+                navigator.serviceWorker.getRegistrations().then(registrations => {
+                    if (registrations.length > 0) {
+                        registrations[0].showNotification(title, { body, icon: 'https://cdn-icons-png.flaticon.com/512/3204/3204325.png' });
+                    } else {
+                        // Fallback to standard Notification if no service worker is registered
+                        new Notification(title, { body, icon: 'https://cdn-icons-png.flaticon.com/512/3204/3204325.png' });
+                    }
+                }).catch(() => {
+                    new Notification(title, { body, icon: 'https://cdn-icons-png.flaticon.com/512/3204/3204325.png' });
+                });
+            } else {
+                new Notification(title, { body, icon: 'https://cdn-icons-png.flaticon.com/512/3204/3204325.png' });
+            }
+        } catch (e) {
+            new Notification(title, { body, icon: 'https://cdn-icons-png.flaticon.com/512/3204/3204325.png' });
+        }
     }, []);
 
     useEffect(() => {
         requestNotificationPermission();
+
+        // Initialize timer web worker for background recording
+        const workerCode = `
+            let timerId = null;
+            self.onmessage = function(e) {
+                if (e.data === 'start') {
+                    if (timerId) clearInterval(timerId);
+                    // Emit a tick every ~33ms (30fps)
+                    timerId = setInterval(() => self.postMessage('tick'), 1000 / 30);
+                } else if (e.data === 'stop') {
+                    if (timerId) clearInterval(timerId);
+                    timerId = null;
+                }
+            };
+        `;
+        const blob = new Blob([workerCode], { type: 'application/javascript' });
+        const workerUrl = URL.createObjectURL(blob);
+        timerWorkerRef.current = new Worker(workerUrl);
+
+        return () => {
+            if (timerWorkerRef.current) {
+                timerWorkerRef.current.terminate();
+                URL.revokeObjectURL(workerUrl);
+            }
+        };
     }, [requestNotificationPermission]);
 
     const [blocks, setBlocks] = useState<Block[]>([
@@ -98,6 +142,7 @@ export default function App() {
     const particlesRef = useRef<any[]>([]);
     const previewImage = useRef<HTMLImageElement | null>(null);
     const activeAudioElement = useRef<HTMLAudioElement | null>(null);
+    const timerWorkerRef = useRef<Worker | null>(null);
     
     const isPreviewing = useRef(false);
     const isRecording = useRef(false);
@@ -473,6 +518,9 @@ export default function App() {
         recorder.onstop = () => {
             isRecording.current = false; 
             setIsRecordingUI(false);
+            if (timerWorkerRef.current) timerWorkerRef.current.postMessage('stop');
+            if (timerWorkerRef.current) timerWorkerRef.current.onmessage = null;
+
             const blob = new Blob(chunks, { type: 'video/webm' });
             const url = URL.createObjectURL(blob); 
             setFinalVideoUrl(url);
@@ -525,15 +573,27 @@ export default function App() {
             }
             
             drawOverlays(ctx, 1080, 1920, dataArray, true, cIdx, titleAlpha, subAlpha, yOff);
-            
-            // Use setTimeout fallback for background recording
-            if (document.hidden) {
-                setTimeout(recordDraw, 1000 / 30); // Force ~30fps even if hidden
-            } else {
-                requestAnimationFrame(recordDraw);
-            }
         };
-        recordDraw();
+
+        // Start the worker to continuously call recordDraw even if tab is backgrounded
+        if (timerWorkerRef.current) {
+            timerWorkerRef.current.onmessage = (e) => {
+                if (e.data === 'tick') {
+                    recordDraw();
+                }
+            };
+            timerWorkerRef.current.postMessage('start');
+        } else {
+            // Fallback just in case worker failed to load
+            const fallbackLoop = () => {
+                recordDraw();
+                if (isRecording.current) {
+                    if (document.hidden) setTimeout(fallbackLoop, 1000 / 30);
+                    else requestAnimationFrame(fallbackLoop);
+                }
+            };
+            fallbackLoop();
+        }
 
         for (let i = 0; i < 4; i++) {
             if (stopRequested.current) break; 
@@ -867,9 +927,29 @@ export default function App() {
                             <h3 className="text-xl font-black text-green-700 mb-4 text-center">Vídeo Concluído!</h3>
                             <video controls src={finalVideoUrl} className="max-w-full h-auto mx-auto mb-6 border rounded-2xl bg-black shadow-lg"></video>
                             
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                                 <a href={finalVideoUrl} download={`Evangelho-${date.replace(/-/g,'.')}.mp4`} className="flex items-center justify-center py-3 bg-green-600 text-white rounded-xl font-bold hover:bg-green-700 shadow transition">Baixar MP4</a>
                                 <button onClick={uploadVideoToDrive} className="flex items-center justify-center py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 shadow transition">Salvar Drive</button>
+                                <button onClick={async () => {
+                                    try {
+                                        const response = await fetch(finalVideoUrl);
+                                        const blob = await response.blob();
+                                        const file = new File([blob], `Evangelho-${date.replace(/-/g,'.')}.mp4`, { type: 'video/mp4' });
+                                        if (navigator.share) {
+                                            await navigator.share({
+                                                title: 'Vídeo da Liturgia',
+                                                text: getTikTokDesc(),
+                                                files: [file]
+                                            });
+                                            showMsg("Compartilhado com sucesso!", "success");
+                                        } else {
+                                            showMsg("Compartilhamento nativo não suportado neste dispositivo.", "error");
+                                        }
+                                    } catch (err) {
+                                        console.error("Erro ao compartilhar:", err);
+                                        showMsg("Erro ao tentar compartilhar.", "error");
+                                    }
+                                }} className="flex items-center justify-center py-3 bg-black text-white rounded-xl font-bold hover:bg-gray-800 shadow transition">Compartilhar TikTok</button>
                             </div>
                         </div>
                     )}

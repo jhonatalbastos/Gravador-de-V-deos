@@ -511,7 +511,28 @@ export default function App() {
         const dataArray = new Uint8Array(128);
         
         const stream = new MediaStream([...canvas.captureStream(30).getVideoTracks(), ...dest.stream.getAudioTracks()]);
-        const recorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=h264', videoBitsPerSecond: 3000000 });
+
+        let mimeType = 'video/webm;codecs=vp8,opus';
+        let fileExt = '.webm';
+
+        if (MediaRecorder.isTypeSupported('video/mp4;codecs=h264,aac')) {
+            mimeType = 'video/mp4;codecs=h264,aac';
+            fileExt = '.mp4';
+        } else if (MediaRecorder.isTypeSupported('video/mp4')) {
+            mimeType = 'video/mp4';
+            fileExt = '.mp4';
+        } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')) {
+            mimeType = 'video/webm;codecs=vp9,opus';
+        } else if (MediaRecorder.isTypeSupported('video/webm;codecs=h264,opus')) {
+            mimeType = 'video/webm;codecs=h264,opus';
+        }
+
+        const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 3000000 });
+
+        // Store video extension as a global window variable for download step
+        (window as any).videoExt = fileExt;
+        (window as any).videoMimeType = mimeType;
+
         const chunks: BlobPart[] = []; 
         recorder.ondataavailable = e => chunks.push(e.data);
         
@@ -521,7 +542,7 @@ export default function App() {
             if (timerWorkerRef.current) timerWorkerRef.current.postMessage('stop');
             if (timerWorkerRef.current) timerWorkerRef.current.onmessage = null;
 
-            const blob = new Blob(chunks, { type: 'video/webm' });
+            const blob = new Blob(chunks, { type: mimeType });
             const url = URL.createObjectURL(blob); 
             setFinalVideoUrl(url);
             showMsg("Gravação Concluída!", "success");
@@ -928,28 +949,56 @@ export default function App() {
                             <video controls src={finalVideoUrl} className="max-w-full h-auto mx-auto mb-6 border rounded-2xl bg-black shadow-lg"></video>
                             
                             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                                <a href={finalVideoUrl} download={`Evangelho-${date.replace(/-/g,'.')}.mp4`} className="flex items-center justify-center py-3 bg-green-600 text-white rounded-xl font-bold hover:bg-green-700 shadow transition">Baixar MP4</a>
+                                <a href={finalVideoUrl} download={`Evangelho-${date.replace(/-/g,'.')}${(window as any).videoExt || '.webm'}`} className="flex items-center justify-center py-3 bg-green-600 text-white rounded-xl font-bold hover:bg-green-700 shadow transition">Baixar {(window as any).videoExt === '.mp4' ? 'MP4' : 'WebM'}</a>
                                 <button onClick={uploadVideoToDrive} className="flex items-center justify-center py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 shadow transition">Salvar Drive</button>
                                 <button onClick={async () => {
                                     try {
+                                        const fileExt = (window as any).videoExt || '.webm';
+                                        const mimeType = (window as any).videoMimeType || 'video/webm';
+                                        const filename = `Evangelho-${date.replace(/-/g,'.')}${fileExt}`;
+
                                         const response = await fetch(finalVideoUrl);
                                         const blob = await response.blob();
-                                        const file = new File([blob], `Evangelho-${date.replace(/-/g,'.')}.mp4`, { type: 'video/mp4' });
-                                        if (navigator.share) {
-                                            await navigator.share({
-                                                title: 'Vídeo da Liturgia',
-                                                text: getTikTokDesc(),
-                                                files: [file]
-                                            });
-                                            showMsg("Compartilhado com sucesso!", "success");
-                                        } else {
-                                            showMsg("Compartilhamento nativo não suportado neste dispositivo.", "error");
+                                        const file = new File([blob], filename, { type: mimeType });
+
+                                        // 1. Tentar Median.co Native Share Bridge
+                                        const winObj = window as any;
+                                        if (winObj.median && winObj.median.share && winObj.median.share.downloadAndShare) {
+                                            try {
+                                                winObj.median.share.downloadAndShare({
+                                                    url: finalVideoUrl,
+                                                    filename: filename
+                                                });
+                                                showMsg("Enviando para compartilhamento...", "success");
+                                                return;
+                                            } catch (medianErr) {
+                                                console.error("Median share error:", medianErr);
+                                            }
                                         }
+
+                                        // 2. Tentar Web Share API padrão (Funciona no Chrome Android fora do Median)
+                                        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                                            try {
+                                                await navigator.share({
+                                                    title: 'Vídeo da Liturgia',
+                                                    text: getTikTokDesc(),
+                                                    files: [file]
+                                                });
+                                                showMsg("Compartilhado com sucesso!", "success");
+                                                return;
+                                            } catch (shareErr: any) {
+                                                if (shareErr.name === 'AbortError') return; // Usuário cancelou
+                                                console.error("Share error:", shareErr);
+                                            }
+                                        }
+
+                                        // 3. Fallback se não suportado (ex: WebView Median sem módulo native share pago/bloqueado)
+                                        showMsg("Baixe o vídeo primeiro para compartilhá-lo (Nativo não suportado).", "error");
                                     } catch (err) {
                                         console.error("Erro ao compartilhar:", err);
                                         showMsg("Erro ao tentar compartilhar.", "error");
                                     }
-                                }} className="flex items-center justify-center py-3 bg-black text-white rounded-xl font-bold hover:bg-gray-800 shadow transition">Compartilhar TikTok</button>
+                                }} className="flex items-center justify-center py-3 bg-black text-white rounded-xl font-bold hover:bg-gray-800 shadow transition">Compartilhar</button>
                             </div>
                         </div>
                     )}

@@ -137,6 +137,14 @@ export default function App() {
     const [finalVideoUrl, setFinalVideoUrl] = useState<string | null>(null);
     const [isRecordingUI, setIsRecordingUI] = useState(false);
 
+    // Batch Processing State
+    const [isBatchProcessing, setIsBatchProcessing] = useState(false);
+    const [batchCurrentIndex, setBatchCurrentIndex] = useState(0);
+    const [batchTotal, setBatchTotal] = useState(0);
+    const [batchResults, setBatchResults] = useState<{ filename: string; status: 'success' | 'error'; message: string; url?: string; tiktokText?: string; dateStr?: string }[]>([]);
+    const [batchETASeconds, setBatchETASeconds] = useState<number | null>(null);
+    const batchStartTimeRef = useRef<number | null>(null);
+
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const previewWaveData = useRef(new Uint8Array(128));
     const particlesRef = useRef<any[]>([]);
@@ -152,12 +160,15 @@ export default function App() {
     const blocksRef = useRef(blocks);
     useEffect(() => { blocksRef.current = blocks; }, [blocks]);
 
+    const tiktokTextRef = useRef(tiktokText);
+    useEffect(() => { tiktokTextRef.current = tiktokText; }, [tiktokText]);
+
     const stateRef = useRef({
-        readingType, titleFontSize, subtitleFontSize, textYPos, date, gospelRef, liturgyName, liturgyColor, waveformOpacity, waveformWidth, waveformAmplitude, motionSpeed, subtitleSlideEnabled, particlesEnabled, motionEnabled
+        readingType, titleFontSize, subtitleFontSize, textYPos, date, gospelRef, liturgyName, liturgyColor, waveformOpacity, waveformWidth, waveformAmplitude, motionSpeed, subtitleSlideEnabled, particlesEnabled, motionEnabled, tiktokText
     });
     useEffect(() => {
-        stateRef.current = { readingType, titleFontSize, subtitleFontSize, textYPos, date, gospelRef, liturgyName, liturgyColor, waveformOpacity, waveformWidth, waveformAmplitude, motionSpeed, subtitleSlideEnabled, particlesEnabled, motionEnabled };
-    }, [readingType, titleFontSize, subtitleFontSize, textYPos, date, gospelRef, liturgyName, liturgyColor, waveformOpacity, waveformWidth, waveformAmplitude, motionSpeed, subtitleSlideEnabled, particlesEnabled, motionEnabled]);
+        stateRef.current = { readingType, titleFontSize, subtitleFontSize, textYPos, date, gospelRef, liturgyName, liturgyColor, waveformOpacity, waveformWidth, waveformAmplitude, motionSpeed, subtitleSlideEnabled, particlesEnabled, motionEnabled, tiktokText };
+    }, [readingType, titleFontSize, subtitleFontSize, textYPos, date, gospelRef, liturgyName, liturgyColor, waveformOpacity, waveformWidth, waveformAmplitude, motionSpeed, subtitleSlideEnabled, particlesEnabled, motionEnabled, tiktokText]);
 
     useEffect(() => {
         const s = JSON.parse(localStorage.getItem('v2_set') || '{}'); 
@@ -191,9 +202,9 @@ export default function App() {
         }, 2000);
     }
 
-    const fetchLiturgyReference = async (overrideDate?: string) => {
+    const fetchLiturgyReference = async (overrideDate?: string): Promise<{ref: string, name: string, color: string} | null> => {
         const targetDate = overrideDate || date;
-        if (!targetDate) return showMsg("Data necessária.", "error");
+        if (!targetDate) { showMsg("Data necessária.", "error"); return null; }
         showMsg("Consultando API litúrgica...", "info");
         try {
             const res = await fetch(`https://liturgia.up.railway.app/${targetDate.split('-').reverse().join('-')}`);
@@ -205,9 +216,11 @@ export default function App() {
                 setLiturgyColor(data.cor || '');
                 showMsg("Referência encontrada!", "success");
                 setShowStudio(true);
+                return { ref: t.referencia, name: data.liturgia || '', color: data.cor || '' };
             } else throw new Error("Vazio.");
         } catch (e) { 
             showMsg("Erro ao buscar liturgia.", "error"); 
+            return null;
         }
     }
 
@@ -233,17 +246,24 @@ export default function App() {
         });
     }
 
-    const handleZipUpload = async (file: File | null) => {
-        if (!file) return;
-        
+    const processSingleZip = async (file: File): Promise<boolean> => {
         // Clear previous data to avoid duplications
         setTiktokText('');
         setGospelRef('');
         setLiturgyName('');
         setLiturgyColor('');
         setFinalVideoUrl(null);
+        tiktokTextRef.current = '';
+        stateRef.current = {
+            ...stateRef.current,
+            date: '',
+            gospelRef: '',
+            liturgyName: '',
+            liturgyColor: '',
+            tiktokText: ''
+        };
 
-        showMsg("Processando arquivo ZIP...", "info");
+        showMsg(`Processando arquivo ZIP: ${file.name}...`, "info");
         try {
             const zip = new JSZip();
             const contents = await zip.loadAsync(file);
@@ -251,11 +271,12 @@ export default function App() {
             // Extract date from filename: DD.MM.AAAA.zip
             const nameMatch = file.name.match(/^(\d{2})\.(\d{2})\.(\d{4})/);
             let extractedDate = "";
+            let liturgyData = null;
             if (nameMatch) {
                 const [_, d, m, y] = nameMatch;
                 extractedDate = `${y}-${m}-${d}`;
                 setDate(extractedDate);
-                fetchLiturgyReference(extractedDate);
+                liturgyData = await fetchLiturgyReference(extractedDate);
             }
 
             const newBlocks = JSON.parse(JSON.stringify(blocks));
@@ -296,22 +317,42 @@ export default function App() {
             
             if (foundText) setTiktokText(foundText);
             setBlocks(newBlocks);
-            showMsg("ZIP processado com sucesso!", "success");
             
-            // Auto-start recording if all assets are present
-            setTimeout(() => {
-                const ready = newBlocks.every((b: any) => b.audioUrl && b.imageUrl);
-                if (ready) {
-                    startFullVideoRecording();
-                } else {
-                    showMsg("ZIP carregado, mas faltam arquivos para iniciar gravação automática.", "info");
-                }
-            }, 1500);
-        } catch (e) {
+            // Update the blocks and state synchronously for batch processing
+            blocksRef.current = newBlocks;
+            tiktokTextRef.current = foundText;
+            stateRef.current = {
+                ...stateRef.current,
+                date: extractedDate,
+                gospelRef: liturgyData?.ref || '',
+                liturgyName: liturgyData?.name || '',
+                liturgyColor: liturgyData?.color || '',
+                tiktokText: foundText
+            };
+
+            const ready = newBlocks.every((b: any) => b.audioUrl && b.imageUrl);
+            if (!ready) {
+                throw new Error("Faltam arquivos de áudio ou imagem no ZIP.");
+            }
+
+            showMsg("ZIP pronto para gravação!", "success");
+            return true;
+        } catch (e: any) {
             console.error(e);
-            showMsg("Erro ao processar ZIP.", "error");
+            showMsg(`Erro ao processar ZIP: ${e.message}`, "error");
+            return false;
         }
-    }
+    };
+
+    const handleZipUpload = async (file: File | null) => {
+        if (!file) return;
+        const success = await processSingleZip(file);
+        if (success) {
+            setTimeout(() => {
+                startFullVideoRecording();
+            }, 1500);
+        }
+    };
 
     const initParticles = (width: number, height: number) => { 
         particlesRef.current = []; 
@@ -490,9 +531,12 @@ export default function App() {
         animate();
     }, []);
 
-    const startFullVideoRecording = async () => {
+    const startFullVideoRecording = async (): Promise<{ url: string, mimeType: string, fileExt: string, dateStr: string } | null> => {
         const currentBlocks = blocksRef.current;
-        if (currentBlocks.some(b => !b.audioUrl || !b.imageUrl)) return showMsg("Faltam recursos para gravar.", "error");
+        if (currentBlocks.some(b => !b.audioUrl || !b.imageUrl)) {
+            showMsg("Faltam recursos para gravar.", "error");
+            return null;
+        }
         
         isPreviewing.current = false; 
         isRecording.current = true; 
@@ -504,6 +548,7 @@ export default function App() {
         const ctx = canvas.getContext('2d');
         if (!ctx) return;
 
+        return new Promise(async (resolve, reject) => {
         const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)(); 
         const dest = audioCtx.createMediaStreamDestination();
         const analyser = audioCtx.createAnalyser(); 
@@ -577,6 +622,15 @@ export default function App() {
             sendNotification("Vídeo Pronto!", "A gravação da liturgia foi concluída com sucesso.");
             
             startPreviewLoop();
+
+            resolve({ url, mimeType, fileExt, dateStr: stateRef.current.date });
+        };
+
+        recorder.onerror = (e) => {
+            isRecording.current = false;
+            setIsRecordingUI(false);
+            console.error("Recording error: ", e);
+            reject(e);
         };
 
         const assets: { img: HTMLImageElement, audio: string }[] = []; 
@@ -658,22 +712,133 @@ export default function App() {
             src.connect(analyser); 
             src.connect(dest);
             
-            await audio.play(); 
-            await new Promise<void>(r => { 
-                audio.onended = () => r(); 
-                const ck = setInterval(() => { 
-                    if(stopRequested.current) { 
-                        audio.pause(); 
-                        r(); 
-                        clearInterval(ck); 
-                    } 
-                }, 50); 
-            });
-            if(!stopRequested.current) await new Promise(r => setTimeout(r, 600));
+            try {
+                await audio.play();
+                await new Promise<void>(r => {
+                    audio.onended = () => r();
+                    const ck = setInterval(() => {
+                        if(stopRequested.current) {
+                            audio.pause();
+                            r();
+                            clearInterval(ck);
+                        }
+                    }, 50);
+                });
+                if(!stopRequested.current) await new Promise(r => setTimeout(r, 600));
+            } catch (err) {
+                console.error("Erro ao tocar áudio", err);
+                recorder.stop();
+                audioCtx.close();
+                return resolve(null); // Resolve with null on error during playback to gracefully fail in batch
+            }
+        }
+
+        if (stopRequested.current) {
+            resolve(null);
         }
         recorder.stop(); 
         audioCtx.close();
+        });
     }
+
+    const startBatchProcess = async (files: FileList | null) => {
+        if (!files || files.length === 0) return;
+
+        const fileArray = Array.from(files).filter(f => f.name.toLowerCase().endsWith('.zip'));
+        if (fileArray.length === 0) {
+            showMsg("Nenhum arquivo ZIP selecionado.", "error");
+            return;
+        }
+
+        setIsBatchProcessing(true);
+        setBatchTotal(fileArray.length);
+        setBatchCurrentIndex(0);
+        setBatchResults([]);
+        setBatchETASeconds(null);
+        batchStartTimeRef.current = Date.now();
+        stopRequested.current = false;
+
+        const results = [];
+        let totalTimeAccumulated = 0;
+
+        for (let i = 0; i < fileArray.length; i++) {
+            if (stopRequested.current) break;
+
+            setBatchCurrentIndex(i + 1);
+            const file = fileArray[i];
+
+            try {
+                const startTime = Date.now();
+                const success = await processSingleZip(file);
+
+                if (!success) {
+                    results.push({ filename: file.name, status: 'error' as const, message: 'Falha ao processar ZIP.' });
+                    setBatchResults([...results]);
+                    continue;
+                }
+
+                if (stopRequested.current) break;
+
+                // Small delay to ensure state is settled and UI updates
+                await new Promise(r => setTimeout(r, 1000));
+
+                const videoData = await startFullVideoRecording();
+
+                if (stopRequested.current) break;
+
+                if (videoData && videoData.url) {
+                    // Auto download video
+                    const videoA = document.createElement('a');
+                    videoA.href = videoData.url;
+                    const formattedDate = videoData.dateStr.replace(/-/g, '.');
+                    videoA.download = `Evangelho-${formattedDate}${videoData.fileExt}`;
+                    videoA.click();
+
+                    // Auto download text
+                    const txtA = document.createElement('a');
+                    const txtFile = new Blob([getTikTokDesc()], {type: 'text/plain'});
+                    txtA.href = URL.createObjectURL(txtFile);
+                    txtA.download = `Evangelho-${formattedDate}.txt`;
+                    txtA.click();
+
+                    results.push({
+                        filename: file.name,
+                        status: 'success' as const,
+                        message: 'Concluído.',
+                        url: videoData.url,
+                        tiktokText: getTikTokDesc(),
+                        dateStr: videoData.dateStr
+                    });
+                } else {
+                    results.push({ filename: file.name, status: 'error' as const, message: 'Falha na gravação do vídeo.' });
+                }
+
+                setBatchResults([...results]);
+
+                // Calculate ETA
+                const timeTakenForOne = (Date.now() - startTime) / 1000;
+                totalTimeAccumulated += timeTakenForOne;
+                const avgTimePerItem = totalTimeAccumulated / (i + 1);
+                const remainingItems = fileArray.length - (i + 1);
+                setBatchETASeconds(Math.round(avgTimePerItem * remainingItems));
+
+            } catch (err: any) {
+                console.error("Batch item error:", err);
+                results.push({ filename: file.name, status: 'error' as const, message: err.message || 'Erro desconhecido.' });
+                setBatchResults([...results]);
+            }
+        }
+
+        setIsBatchProcessing(false);
+        setBatchETASeconds(null);
+
+        if (stopRequested.current) {
+            showMsg("Processamento em lote interrompido.", "info");
+        } else {
+            showMsg("Processamento em lote concluído!", "success");
+            sendNotification("Lote Concluído!", `Processamento de ${fileArray.length} arquivos finalizado.`);
+        }
+    };
 
     const stopRecording = () => { 
         stopRequested.current = true; 
@@ -681,10 +846,12 @@ export default function App() {
         isPreviewing.current = true;
         isRecording.current = false;
         setIsRecordingUI(false);
+        setIsBatchProcessing(false);
     }
 
     const getTikTokDesc = () => {
-        const body = tiktokText || "";
+        const body = tiktokTextRef.current || "";
+        const s = stateRef.current;
         
         // If the body already seems to contain a full description (header + liturgy info), 
         // return it directly to avoid duplications.
@@ -693,29 +860,31 @@ export default function App() {
             return body;
         }
 
-        const [year, month, day] = date.split('-');
+        if (!s.date) return body;
+
+        const [year, month, day] = s.date.split('-');
         const months = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
         const formattedDate = `${parseInt(day)} de ${months[parseInt(month)-1]} de ${year}`;
         
         let evangelist = "";
-        const refLower = gospelRef.toLowerCase();
+        const refLower = (s.gospelRef || "").toLowerCase();
         if (refLower.startsWith('mt')) evangelist = "Mateus";
         else if (refLower.startsWith('mc')) evangelist = "Marcos";
         else if (refLower.startsWith('lc')) evangelist = "Lucas";
         else if (refLower.startsWith('jo')) evangelist = "João";
 
         let header = "";
-        if (readingType === 'evangelho') {
+        if (s.readingType === 'evangelho') {
             header = `📖 Proclamação do Evangelho de Jesus Cristo ✠ segundo ${evangelist || 'Cristo'} - ${formattedDate}`;
-        } else if (readingType === 'psalm') {
+        } else if (s.readingType === 'psalm') {
             header = `🎵 Salmo Responsorial - ${formattedDate}`;
         } else {
             header = `📜 Leitura - ${formattedDate}`;
         }
 
-        const color = (liturgyColor || "Branco").toUpperCase();
+        const color = (s.liturgyColor || "Branco").toUpperCase();
         
-        return `${header}\n\n⛪ SEMANA: ${liturgyName}\n🎨 COR: ${color}\n📍 Ref: ${gospelRef}\n\n${body}\n\n#evangelho #deus #jesus #biblia #palavradedeus`;
+        return `${header}\n\n⛪ SEMANA: ${s.liturgyName}\n🎨 COR: ${color}\n📍 Ref: ${s.gospelRef}\n\n${body}\n\n#evangelho #deus #jesus #biblia #palavradedeus`;
     }
     
     const copyTikTokDesc = () => {
@@ -788,15 +957,40 @@ export default function App() {
                                 <button onClick={() => fetchLiturgyReference()} className="bg-indigo-600 text-white px-6 rounded-lg text-xs font-bold shadow-md hover:bg-indigo-700 active:scale-95 transition flex items-center gap-2 py-2">
                                     <Calendar size={14} /> Buscar Liturgia
                                 </button>
-                                <label className="bg-emerald-600 text-white px-6 rounded-lg text-xs font-bold shadow-md hover:bg-emerald-700 active:scale-95 transition flex items-center gap-2 py-2 cursor-pointer">
+                                <label className={`bg-emerald-600 text-white px-6 rounded-lg text-xs font-bold shadow-md hover:bg-emerald-700 active:scale-95 transition flex items-center gap-2 py-2 cursor-pointer ${isBatchProcessing ? 'opacity-50 pointer-events-none' : ''}`}>
                                     <FileArchive size={14} />
-                                    <span>Importar ZIP</span>
-                                    <input type="file" className="hidden" accept=".zip" onChange={e => handleZipUpload(e.target.files?.[0] || null)} />
+                                    <span>Importar ZIP(s)</span>
+                                    <input type="file" className="hidden" accept=".zip" multiple onChange={e => startBatchProcess(e.target.files)} disabled={isBatchProcessing} />
                                 </label>
                             </div>
                         </div>
                     </div>
                 </div>
+
+                {/* Batch Processing Progress Bar */}
+                {isBatchProcessing && (
+                    <div className="bg-white rounded-2xl shadow-lg p-6 border border-indigo-200 mt-6 relative overflow-hidden">
+                        <div className="absolute top-0 left-0 h-1 bg-indigo-500 transition-all duration-500 ease-out" style={{ width: `${(batchCurrentIndex / batchTotal) * 100}%` }}></div>
+                        <div className="flex justify-between items-center mb-2">
+                            <h3 className="text-indigo-800 font-bold text-sm flex items-center gap-2">
+                                <Loader2 size={16} className="animate-spin" />
+                                Processamento em Lote Ativo
+                            </h3>
+                            <span className="text-xs font-black bg-indigo-100 text-indigo-700 px-3 py-1 rounded-full">
+                                {batchCurrentIndex} de {batchTotal}
+                            </span>
+                        </div>
+                        <div className="flex justify-between items-center text-xs text-gray-500 font-semibold">
+                            <p>Gravando arquivo atual e gerando assets...</p>
+                            {batchETASeconds !== null && (
+                                <p>ETA: {batchETASeconds > 60 ? `${Math.floor(batchETASeconds / 60)}m ` : ''}{batchETASeconds % 60}s</p>
+                            )}
+                        </div>
+                        <button onClick={stopRecording} className="mt-4 w-full bg-red-50 text-red-600 border border-red-200 py-2 rounded-lg font-bold text-xs hover:bg-red-100 transition active:scale-95">
+                            Cancelar Lote
+                        </button>
+                    </div>
+                )}
 
                 <div className={`fixed bottom-8 left-1/2 -translate-x-1/2 z-50 transition-all duration-300 ${message.text ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4 pointer-events-none'}`}>
                     <div className={`px-6 py-3 rounded-full shadow-2xl font-bold text-sm flex items-center gap-3 border ${message.type === 'error' ? 'bg-red-50 text-red-600 border-red-200' : message.type === 'success' ? 'bg-emerald-50 text-emerald-600 border-emerald-200' : 'bg-indigo-50 text-indigo-600 border-indigo-200'}`}>
@@ -1035,6 +1229,34 @@ export default function App() {
                         </div>
                     )}
                 </section>
+
+                {/* Batch Processing Report */}
+                {batchResults.length > 0 && !isBatchProcessing && (
+                    <section className="mt-8 bg-white p-6 rounded-3xl border border-gray-200 shadow-xl mb-8">
+                        <h2 className="text-xl font-black text-indigo-800 mb-4 border-b pb-2">Relatório de Processamento em Lote</h2>
+                        <div className="space-y-3">
+                            {batchResults.map((result, idx) => (
+                                <div key={idx} className={`p-4 rounded-xl border ${result.status === 'success' ? 'bg-emerald-50 border-emerald-100' : 'bg-red-50 border-red-100'}`}>
+                                    <div className="flex justify-between items-center">
+                                        <div className="flex items-center gap-3">
+                                            {result.status === 'success' ? <CheckCircle2 className="text-emerald-500" size={20} /> : <AlertCircle className="text-red-500" size={20} />}
+                                            <div>
+                                                <h4 className={`font-bold text-sm ${result.status === 'success' ? 'text-emerald-800' : 'text-red-800'}`}>{result.filename}</h4>
+                                                <p className={`text-xs ${result.status === 'success' ? 'text-emerald-600' : 'text-red-600'}`}>{result.message}</p>
+                                            </div>
+                                        </div>
+                                        {result.status === 'success' && result.url && (
+                                            <a href={result.url} download={`Evangelho-${(result.dateStr || '').replace(/-/g,'.')}.mp4`} className="bg-white px-4 py-1.5 rounded-full text-xs font-bold text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition shadow-sm">
+                                                Re-Baixar Vídeo
+                                            </a>
+                                        )}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </section>
+                )}
+
             </div>
         </div>
     );

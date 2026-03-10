@@ -49,8 +49,10 @@ export default function App() {
     const [gospelRef, setGospelRef] = useState('');
     const [liturgyName, setLiturgyName] = useState('');
     const [liturgyColor, setLiturgyColor] = useState('');
+    const [tiktokText, setTiktokText] = useState('');
     
     const [message, setMessage] = useState({ text: '', type: 'info' });
+    const msgTimeout = useRef<NodeJS.Timeout | null>(null);
 
     const requestNotificationPermission = useCallback(async () => {
         if (!("Notification" in window)) return;
@@ -137,7 +139,11 @@ export default function App() {
     }
 
     const showMsg = (text: string, type: 'info' | 'success' | 'error' = 'info') => {
+        if (msgTimeout.current) clearTimeout(msgTimeout.current);
         setMessage({ text, type });
+        msgTimeout.current = setTimeout(() => {
+            setMessage({ text: '', type: 'info' });
+        }, 2000);
     }
 
     const fetchLiturgyReference = async (overrideDate?: string) => {
@@ -184,6 +190,14 @@ export default function App() {
 
     const handleZipUpload = async (file: File | null) => {
         if (!file) return;
+        
+        // Clear previous data to avoid duplications
+        setTiktokText('');
+        setGospelRef('');
+        setLiturgyName('');
+        setLiturgyColor('');
+        setFinalVideoUrl(null);
+
         showMsg("Processando arquivo ZIP...", "info");
         try {
             const zip = new JSZip();
@@ -200,11 +214,18 @@ export default function App() {
             }
 
             const newBlocks = JSON.parse(JSON.stringify(blocks));
+            let foundText = "";
             
             for (const [path, zipEntry] of Object.entries(contents.files)) {
                 if (zipEntry.dir) continue;
                 
                 const fileName = path.split('/').pop() || "";
+
+                if (fileName.toLowerCase().startsWith("texto")) {
+                    foundText = await zipEntry.async("string");
+                    continue;
+                }
+
                 const numberMatch = fileName.match(/(\d)/);
                 if (!numberMatch) continue;
                 
@@ -213,7 +234,7 @@ export default function App() {
 
                 const lowerName = fileName.toLowerCase();
                 const isAudio = lowerName.match(/\.(mp3|wav|m4a|ogg|aac)$/);
-                const isImage = lowerName.match(/\.(jpg|jpeg|png|webp|gif)$/);
+                const isImage = lowerName.match(/\.(jpg|jpeg|png|webp|jfif|gif)$/);
 
                 if (isAudio || isImage) {
                     const blob = await zipEntry.async("blob");
@@ -228,6 +249,7 @@ export default function App() {
                 }
             }
             
+            if (foundText) setTiktokText(foundText);
             setBlocks(newBlocks);
             showMsg("ZIP processado com sucesso!", "success");
             
@@ -553,6 +575,15 @@ export default function App() {
     }
 
     const getTikTokDesc = () => {
+        const body = tiktokText || "";
+        
+        // If the body already seems to contain a full description (header + liturgy info), 
+        // return it directly to avoid duplications.
+        if ((body.includes("Proclamação") || body.includes("Salmo Responsorial") || body.includes("Leitura")) && 
+            body.includes("SEMANA:") && body.includes("Ref:")) {
+            return body;
+        }
+
         const [year, month, day] = date.split('-');
         const months = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
         const formattedDate = `${parseInt(day)} de ${months[parseInt(month)-1]} de ${year}`;
@@ -575,7 +606,7 @@ export default function App() {
 
         const color = (liturgyColor || "Branco").toUpperCase();
         
-        return `${header}\n\n⛪ SEMANA: ${liturgyName}\n🎨 COR: ${color}\n📍 Ref: ${gospelRef}\n\n#evangelho #deus #jesus #biblia #palavradedeus`;
+        return `${header}\n\n⛪ SEMANA: ${liturgyName}\n🎨 COR: ${color}\n📍 Ref: ${gospelRef}\n\n${body}\n\n#evangelho #deus #jesus #biblia #palavradedeus`;
     }
     
     const copyTikTokDesc = () => {
@@ -587,7 +618,8 @@ export default function App() {
         const a = document.createElement('a');
         const file = new Blob([getTikTokDesc()], {type: 'text/plain'});
         a.href = URL.createObjectURL(file);
-        a.download = `descricao_${date}.txt`;
+        const formattedDate = date.replace(/-/g,'.');
+        a.download = `Evangelho-${formattedDate}.txt`;
         a.click();
     }
     
@@ -657,11 +689,45 @@ export default function App() {
                     </div>
                 </div>
 
-                <div className={`text-center min-h-[1.5rem] font-bold text-sm tracking-tight ${message.type === 'error' ? 'text-red-500' : message.type === 'success' ? 'text-emerald-500' : 'text-indigo-400'}`}>
-                    {message.text}
+                <div className={`fixed bottom-8 left-1/2 -translate-x-1/2 z-50 transition-all duration-300 ${message.text ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4 pointer-events-none'}`}>
+                    <div className={`px-6 py-3 rounded-full shadow-2xl font-bold text-sm flex items-center gap-3 border ${message.type === 'error' ? 'bg-red-50 text-red-600 border-red-200' : message.type === 'success' ? 'bg-emerald-50 text-emerald-600 border-emerald-200' : 'bg-indigo-50 text-indigo-600 border-indigo-200'}`}>
+                        {message.type === 'success' && <CheckCircle2 size={18} />}
+                        {message.type === 'error' && <AlertCircle size={18} />}
+                        {message.type === 'info' && <Loader2 size={18} className="animate-spin" />}
+                        {message.text}
+                    </div>
                 </div>
 
                 <div className="space-y-6">
+                    {/* TikTok Description Section */}
+                    <div className="bg-white rounded-2xl shadow-lg p-6 border border-gray-200">
+                        <div className="flex justify-between items-center mb-4">
+                            <h2 className="text-sm font-bold text-gray-400 uppercase tracking-widest flex items-center gap-2">
+                                <Copy size={16} /> Descrição TikTok
+                            </h2>
+                            <div className="flex gap-2">
+                                <button 
+                                    onClick={copyTikTokDesc}
+                                    className="bg-indigo-50 text-indigo-600 px-4 py-1.5 rounded-full text-xs font-bold hover:bg-indigo-100 transition active:scale-95 flex items-center gap-2"
+                                >
+                                    <Copy size={14} /> Copiar Texto
+                                </button>
+                                <button 
+                                    onClick={downloadTikTokDesc}
+                                    className="bg-emerald-50 text-emerald-600 px-4 py-1.5 rounded-full text-xs font-bold hover:bg-emerald-100 transition active:scale-95 flex items-center gap-2"
+                                >
+                                    <Download size={14} /> Baixar .txt
+                                </button>
+                            </div>
+                        </div>
+                        <textarea 
+                            value={getTikTokDesc()}
+                            onChange={(e) => setTiktokText(e.target.value)}
+                            className="w-full h-40 bg-gray-50 border border-gray-100 rounded-xl p-4 text-xs font-mono text-gray-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 resize-none"
+                            placeholder="A descrição aparecerá aqui..."
+                        />
+                    </div>
+
                     {blocks.map((block, idx) => (
                         <div key={block.id} className="block-card bg-white border border-gray-200 rounded-2xl p-4 md:p-6 shadow-sm">
                             <div className="flex justify-between items-center mb-4">
@@ -802,7 +868,7 @@ export default function App() {
                             <video controls src={finalVideoUrl} className="max-w-full h-auto mx-auto mb-6 border rounded-2xl bg-black shadow-lg"></video>
                             
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                                <a href={finalVideoUrl} download={`video_${date.replace(/-/g,'.')}.mp4`} className="flex items-center justify-center py-3 bg-green-600 text-white rounded-xl font-bold hover:bg-green-700 shadow transition">Baixar MP4</a>
+                                <a href={finalVideoUrl} download={`Evangelho-${date.replace(/-/g,'.')}.mp4`} className="flex items-center justify-center py-3 bg-green-600 text-white rounded-xl font-bold hover:bg-green-700 shadow transition">Baixar MP4</a>
                                 <button onClick={uploadVideoToDrive} className="flex items-center justify-center py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 shadow transition">Salvar Drive</button>
                             </div>
                         </div>

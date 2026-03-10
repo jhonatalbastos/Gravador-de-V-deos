@@ -1,0 +1,58 @@
+DOCUMENTAÇÃO TÉCNICA: LITURGIA TIKTOK STUDIO
+==========================================
+
+1. OBJETIVO DO PRODUTO
+----------------------
+Plataforma de automação para criação de vídeos verticais (9:16) baseados na liturgia diária católica, integrando IA de texto, imagem e voz com renderização em tempo real via Canvas.
+
+2. BUSCA DE DADOS LITÚRGICOS (SISTEMA HÍBRIDO)
+----------------------------------------------
+* Camada 1 (API Railway): Consulta o endpoint 'https://liturgia.up.railway.app/[DD-MM-YYYY]'. Extrai Referência, Liturgia do Dia e Cor Litúrgica.
+* Camada 2 (Fallback Groq): Se a API falhar, o Groq (Llama 3.3) é consultado para deduzir a referência bíblica da data solicitada.
+
+3. MOTOR DE INTELIGÊNCIA ARTIFICIAL (GROQ/LLAMA 3.3)
+----------------------------------------------------
+* Chave de API: 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
+* Estrutura do Roteiro: 4 blocos (Leitura, Reflexão, Aplicação, Oração).
+* Regras de Tempo/Palavras:
+  - Bloco 1: Texto integral da Bíblia.
+  - Blocos 2 e 3: 90-110 palavras (~20s).
+  - Bloco 4: 70-80 palavras (~15s).
+* Formato de Saída: JSON puro (sem markdown) para processamento automático.
+
+4. ENGENHARIA DE PROMPTS DE IMAGEM
+----------------------------------
+Processo em duas etapas para garantir qualidade e consistência:
+* Etapa 1 (Ação): O Groq descreve a cena baseada no roteiro. Bloco 1 (Bíblico/Histórico), Blocos 2-4 (Moderno/Cotidiano).
+* Etapa 2 (Envelopamento): O aplicativo anexa automaticamente:
+  - Âncora de Jesus: Homem de pele morena clara, cabelos castanhos ondulados, barba cuidada, túnicas bege/cinza azulado.
+  - Estilo Visual: Conforme escolha do usuário (Cinematic, Realista, Pintura a Óleo, etc.).
+  - Regra de Formato: Frame vertical 9:16, preenchimento total, sem faixas pretas.
+
+5. ENGINE DE VÍDEO E OVERLAYS (CANVAS 1080x1920)
+------------------------------------------------
+* Resolução: 1080x1920px (9:16).
+* Título Principal (Fixo): Exibe dinamicamente "EVANGELHO", "REFLEXÃO", etc., em caixa preta arredondada no topo.
+* Subtítulos Animados (Slide Down): Data, Referência e Nome da Liturgia.
+  - Lógica: Permanecem fixos por 12 segundos, depois deslizam para baixo e desaparecem (yOff progressivo e alpha decrescente).
+* Indicador de Cor: Linha na base da legenda que muda conforme a cor litúrgica (Verde, Roxo, Branco, etc.).
+* Efeitos Visuais: 
+  - Ken Burns: Zoom suave constante (1.0x a 1.2x).
+  - Waveform: Forma de onda reativa ao áudio no centro da tela.
+  - Partículas: Sistema de "poeira estelar" flutuante.
+
+6. PRODUÇÃO DE ÁUDIO E VÍDEO
+----------------------------
+* Narração: Google TTS (pt-BR-Wavenet-B) com controle de Pitch e Speed.
+* Gravação: Captura do stream do Canvas + Áudio via MediaRecorder (H.264).
+
+7. METADADOS E EXPORTAÇÃO
+-------------------------
+* Descrição TikTok: Gerada automaticamente com cabeçalho litúrgico, metadados (Semana, Cor, Ref), texto integral da leitura e hashtags estratégicas.
+* Exportação: Vídeo em .mp4 e descrição em .txt.
+
+8. LOGICA DE RESILIÊNCIA
+------------------------
+* Retry automático (3 tentativas) para chamadas de IA.
+* Tratamento de erro 429 (Rate Limit) com espera progressiva.
+* Limpeza de strings JSON (remoção de tags markdown) antes do parse.

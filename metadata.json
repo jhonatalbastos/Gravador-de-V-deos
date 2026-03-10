@@ -1,0 +1,7 @@
+{
+  "name": "Estúdio de vídeos - Alicativo",
+  "description": "App para gerar vídeos curtos de liturgia católica para TikTok/Reels usando IA",
+  "requestFramePermissions": [
+    "notifications"
+  ]
+}

@@ -195,6 +195,11 @@ export default function App() {
     }, []);
 
     useEffect(() => {
+        const s = JSON.parse(localStorage.getItem('v2_set') || '{}');
+        localStorage.setItem('v2_set', JSON.stringify({ ...s, bv: backgroundAudioVolume }));
+    }, [backgroundAudioVolume]);
+
+    useEffect(() => {
         const u = blocks?.[0]?.imageUrl;
         if (u) {
             const i = new Image();
@@ -406,6 +411,7 @@ export default function App() {
         const ts = s.titleFontSize;
         const ss = s.subtitleFontSize;
         const yp = s.textYPos;
+        const ss_used = ss * 0.75; // Even smaller subtitles for safe clearance
         
         // Draw Title
         ctx.save();
@@ -425,23 +431,23 @@ export default function App() {
         ctx.textAlign = "center"; 
         ctx.textBaseline = "middle";
         
-        let nY = yp + tH + 20;
+        let nY = yp + tH + 8; // Tighter gap from title
         if (s.date) {
             const dateText = formatDateFull(s.date);
-            ctx.font = `600 ${ss}px 'Alegreya Sans', sans-serif`;
-            const dW = ctx.measureText(dateText).width + 80, dH = ss * 1.6;
-            ctx.fillStyle = "rgba(0, 0, 0, 0.3)"; roundRect(ctx, 540-dW/2, nY, dW, dH, 20);
+            ctx.font = `600 ${ss_used}px 'Alegreya Sans', sans-serif`;
+            const dW = ctx.measureText(dateText).width + 60, dH = ss_used * 1.35;
+            ctx.fillStyle = "rgba(0, 0, 0, 0.3)"; roundRect(ctx, 540-dW/2, nY, dW, dH, 12);
             ctx.fillStyle = "white"; ctx.fillText(dateText, 540, nY + dH/2);
-            nY += dH + 20;
+            nY += dH + 8; // Tighter gap
         }
 
         const refText = s.gospelRef || "Bíblia";
-        ctx.font = `600 ${ss}px 'Alegreya Sans', sans-serif`;
-        const rW = ctx.measureText(refText).width + 80, rH = ss * 1.6;
-        ctx.fillStyle = "rgba(0, 0, 0, 0.3)"; roundRect(ctx, 540-rW/2, nY, rW, rH, 20);
+        ctx.font = `600 ${ss_used}px 'Alegreya Sans', sans-serif`;
+        const rW = ctx.measureText(refText).width + 60, rH = ss_used * 1.35;
+        ctx.fillStyle = "rgba(0, 0, 0, 0.3)"; roundRect(ctx, 540-rW/2, nY, rW, rH, 12);
         ctx.fillStyle = "white"; ctx.fillText(refText, 540, nY + rH/2);
 
-        nY += rH + 20;
+        nY += rH + 8; // Tighter gap
 
         if (s.liturgyName) {
             let litText = s.liturgyName;
@@ -452,7 +458,7 @@ export default function App() {
             // Capitalize first letter
             litText = litText.charAt(0).toUpperCase() + litText.slice(1);
 
-            ctx.font = `600 ${ss}px 'Alegreya Sans', sans-serif`;
+            ctx.font = `600 ${ss_used}px 'Alegreya Sans', sans-serif`;
 
             // Split into multiple lines if exceeds maximum width to prevent overflow
             const words = litText.split(' ');
@@ -475,16 +481,16 @@ export default function App() {
             }
 
             const maxLineWidth = Math.max(...lines.map(line => ctx.measureText(line).width));
-            const lW = maxLineWidth + 80;
-            const lineHeight = ss * 1.3;
-            const lH = ss * 0.3 + lines.length * lineHeight;
+            const lW = maxLineWidth + 60;
+            const lineHeight = ss_used * 1.1; // Very tight line height
+            const lH = ss_used * 0.25 + lines.length * lineHeight;
 
             ctx.fillStyle = "rgba(0, 0, 0, 0.3)"; 
-            roundRect(ctx, 540-lW/2, nY, lW, lH, 20);
+            roundRect(ctx, 540-lW/2, nY, lW, lH, 12);
 
             ctx.fillStyle = "white"; 
             lines.forEach((line, i) => {
-                const lineY = nY + ss * 0.15 + (i + 0.5) * lineHeight;
+                const lineY = nY + ss_used * 0.12 + (i + 0.5) * lineHeight;
                 ctx.fillText(line, 540, lineY);
             });
 
